@@ -3,6 +3,18 @@
   --safety-yellow-deep: #f7a600;
   --safety-yellow-glow: #fff37a;
   --ink: #1a1300;
+  --page-bg:
+    radial-gradient(ellipse at top left, var(--safety-yellow-glow) 0%, transparent 55%),
+    radial-gradient(ellipse at bottom right, var(--safety-yellow-deep) 0%, transparent 60%),
+    linear-gradient(135deg, #ffe600 0%, #ffcc00 40%, #ffaa00 100%);
+}
+
+:root.theme-blueprint {
+  --ink: #ffffff;
+  --page-bg:
+    radial-gradient(ellipse at top left, #2a4a9e 0%, transparent 55%),
+    radial-gradient(ellipse at bottom right, #0a1840 0%, transparent 60%),
+    linear-gradient(135deg, #1e3a8a 0%, #15295e 40%, #0c1e4a 100%);
 }
 
 *,
@@ -16,12 +28,174 @@ body {
   margin: 0;
   padding: 0;
   height: 100%;
-  font-family: 'Inter', system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+  font-family: 'Inter', system-ui, -apple-system, 'Segoe UI', sans-serif;
   color: var(--ink);
-  background:
-    radial-gradient(ellipse at top left, var(--safety-yellow-glow) 0%, transparent 55%),
-    radial-gradient(ellipse at bottom right, var(--safety-yellow-deep) 0%, transparent 60%),
-    linear-gradient(135deg, #ffe600 0%, #ffcc00 40%, #ffaa00 100%);
+  background: var(--page-bg);
   background-attachment: fixed;
   min-height: 100vh;
+}
+
+.theme-blueprint .panel {
+  background: rgba(15, 31, 71, 0.7) !important;
+  border-color: rgba(255, 255, 255, 0.25) !important;
+  color: #fff;
+}
+.theme-blueprint .panel h2,
+.theme-blueprint .panel legend,
+.theme-blueprint .panel .hint,
+.theme-blueprint .panel label,
+.theme-blueprint .panel output {
+  color: #fff;
+}
+.theme-blueprint .panel .count {
+  background: #fff;
+  color: #0c1e4a;
+}
+.theme-blueprint .panel .grid button,
+.theme-blueprint .panel .draw-btn,
+.theme-blueprint .panel .new-room-btn {
+  background: #fff;
+  color: #0c1e4a;
+}
+.theme-blueprint .panel .io-btn {
+  color: #fff;
+  border-color: #fff;
+}
+.theme-blueprint .panel .io-btn:hover:not(:disabled) {
+  background: #fff;
+  color: #0c1e4a;
+}
+.theme-blueprint .top-right .view-toggle,
+.theme-blueprint .top-right .archive {
+  background: rgba(15, 31, 71, 0.7);
+  border-color: #fff;
+}
+.theme-blueprint .top-right .view-toggle button,
+.theme-blueprint .top-right .archive .archive-btn {
+  color: #fff;
+}
+.theme-blueprint .top-right .view-toggle button:hover,
+.theme-blueprint .top-right .archive .archive-btn:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.12);
+}
+.theme-blueprint .top-right .view-toggle button.active {
+  background: #fff;
+  color: #0c1e4a;
+}
+.theme-blueprint .panel .list li {
+  background: rgba(255, 255, 255, 0.08);
+}
+.theme-blueprint .panel .list li.selected {
+  background: #fff;
+  color: #0c1e4a;
+}
+.theme-blueprint .panel .clear {
+  border-color: rgba(255, 255, 255, 0.4);
+  color: #fff;
+}
+.theme-blueprint .panel input[type='range'] {
+  accent-color: #fff;
+}
+.theme-blueprint .stage {
+  background: rgba(255, 255, 255, 0.04) !important;
+  border-color: rgba(255, 255, 255, 0.4) !important;
+}
+.theme-blueprint .scale {
+  background: rgba(255, 255, 255, 0.1) !important;
+  border-color: rgba(255, 255, 255, 0.4) !important;
+  color: #fff !important;
+}
+.theme-blueprint .length-label {
+  background: #fff !important;
+  color: #0c1e4a !important;
+}
+.theme-blueprint .active-room-label {
+  color: #fff !important;
+}
+.theme-blueprint .empty-state {
+  color: rgba(255, 255, 255, 0.6) !important;
+}
+.theme-blueprint .btn-preview {
+  background: #fff !important;
+  color: #0c1e4a !important;
+}
+.theme-blueprint .nav-arrow {
+  background: rgba(15, 31, 71, 0.55) !important;
+  border-color: #fff !important;
+  color: #fff !important;
+}
+.theme-blueprint .contour-controls {
+  background: rgba(15, 31, 71, 0.85) !important;
+  border-color: #fff !important;
+}
+.theme-blueprint .contour-hint {
+  color: #fff !important;
+}
+.theme-blueprint .contour-btn {
+  color: #fff !important;
+  border-color: #fff !important;
+}
+.theme-blueprint .contour-btn:hover:not(:disabled) {
+  background: #fff !important;
+  color: #0c1e4a !important;
+}
+
+:root.theme-blueprint .rename-modal {
+  background: #0c1e4a;
+  color: #fff;
+}
+:root.theme-blueprint .rename-modal h3 {
+  color: #fff;
+}
+:root.theme-blueprint .rename-input {
+  background: rgba(255, 255, 255, 0.1);
+  border-color: #fff;
+  color: #fff;
+}
+:root.theme-blueprint .rename-input:focus {
+  border-color: #a9c4e8;
+}
+
+:root.theme-blueprint .backdrop {
+  background: rgba(8, 18, 48, 0.65) !important;
+}
+:root.theme-blueprint .card {
+  background: #0c1e4a !important;
+  border-color: #fff !important;
+  box-shadow: 0 18px 48px rgba(0, 0, 0, 0.55) !important;
+}
+:root.theme-blueprint .stripe {
+  background: repeating-linear-gradient(
+    45deg,
+    #ffffff 0 14px,
+    #1e3a8a 14px 28px
+  ) !important;
+}
+:root.theme-blueprint .card h3 {
+  color: #fff !important;
+}
+:root.theme-blueprint .card p {
+  color: #fff !important;
+}
+:root.theme-blueprint .card .icon {
+  background: #fff !important;
+  color: #0c1e4a !important;
+}
+:root.theme-blueprint .card .icon.danger {
+  background: #b91c1c !important;
+  color: #fff !important;
+}
+:root.theme-blueprint .card .btn {
+  background: #fff !important;
+  color: #0c1e4a !important;
+  border-color: #fff !important;
+}
+:root.theme-blueprint .card .btn.ghost {
+  background: transparent !important;
+  color: #fff !important;
+}
+:root.theme-blueprint .card .btn.danger {
+  background: #b91c1c !important;
+  color: #fff !important;
+  border-color: #fff !important;
 }

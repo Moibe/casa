@@ -11,6 +11,15 @@
     });
     if (ok) studio.remove(shape.id);
   }
+  async function confirmRemoveRoom(roomId: string) {
+    const ok = await confirmStore.ask({
+      title: 'Eliminar habitación',
+      message: '¿Eliminar el contorno de esta habitación?',
+      confirmText: 'Eliminar',
+      danger: true
+    });
+    if (ok) studio.removeRoom(roomId);
+  }
   async function confirmClear() {
     if (studio.shapes.length === 0) return;
     const ok = await confirmStore.ask({
@@ -22,6 +31,32 @@
     if (ok) studio.clear();
   }
 
+  function autofocus(el: HTMLInputElement) {
+    el.focus();
+    el.select();
+  }
+
+  function saveRoomName(id: string, value: string) {
+    studio.renameRoom(id, value);
+    const wasCreating = studio.isCreatingNewRoom;
+    studio.setEditingRoomId(null);
+    studio.setIsCreatingNewRoom(false);
+    if (wasCreating) {
+      studio.setView('top');
+      studio.startDrawingRoom({ mandatory: true });
+    }
+  }
+
+  function onCreateRoom() {
+    studio.createAndEditRoom();
+  }
+
+  function onEditArea(roomId: string) {
+    if (studio.drawingRoomId || studio.editingContourRoomId) return;
+    studio.setView('top');
+    studio.startEditingContour(roomId);
+  }
+
   const kinds: { kind: PrimitiveKind; label: string; icon: string }[] = [
     { kind: 'box', label: 'Cubo', icon: '◼' },
     { kind: 'sphere', label: 'Esfera', icon: '●' },
@@ -30,71 +65,79 @@
     { kind: 'torus', label: 'Toro', icon: '◯' }
   ];
 
-  let fileInput: HTMLInputElement;
-
-  function exportScene() {
-    const json = studio.serialize();
-    const blob = new Blob([json], { type: 'application/json' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
-    a.href = url;
-    a.download = `escena-3d-${stamp}.json`;
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
-    URL.revokeObjectURL(url);
-  }
-
-  async function onFileChosen(ev: Event) {
-    const input = ev.currentTarget as HTMLInputElement;
-    const file = input.files?.[0];
-    input.value = '';
-    if (!file) return;
-
-    const text = await file.text();
-
-    if (studio.shapes.length > 0) {
-      const ok = await confirmStore.ask({
-        title: 'Importar escena',
-        message: `Se reemplazarán las ${studio.shapes.length} figuras actuales por las del archivo. ¿Continuar?`,
-        confirmText: 'Importar',
-        danger: true
-      });
-      if (!ok) return;
-    }
-
-    const result = studio.load(text);
-    if (!result.ok) {
-      await confirmStore.ask({
-        title: 'Error al importar',
-        message: result.error,
-        confirmText: 'Entendido',
-        cancelText: 'Cerrar',
-        danger: false
-      });
-    }
-  }
 </script>
 
 <aside class="panel">
+  <div class="project-header">
+    <h2 class="project-name">{studio.projectName}</h2>
+    <button
+      class="edit project-edit"
+      onclick={() => studio.setEditingProject(true)}
+      title="Renombrar proyecto"
+      aria-label="Renombrar proyecto">✎</button
+    >
+  </div>
+
+  <button
+    class="new-room-btn"
+    onclick={onCreateRoom}
+    disabled={studio.editingRoomId !== null}
+    title={studio.editingRoomId !== null
+      ? 'Termina de nombrar la habitación actual'
+      : 'Crear nueva habitación'}
+  >
+    <span class="icon">+</span><span>Nueva habitación</span>
+  </button>
+
   <section>
-    <h2>Archivo</h2>
-    <div class="io">
-      <button class="io-btn" onclick={exportScene} disabled={studio.shapes.length === 0}>
-        <span>⬇</span><span>Exportar</span>
-      </button>
-      <button class="io-btn" onclick={() => fileInput.click()}>
-        <span>⬆</span><span>Importar</span>
-      </button>
-      <input
-        bind:this={fileInput}
-        type="file"
-        accept="application/json,.json"
-        onchange={onFileChosen}
-        hidden
-      />
-    </div>
+    <h2>
+      Habitaciones
+      <span class="count">{studio.rooms.length}</span>
+    </h2>
+    {#if studio.rooms.length > 0}
+      <ul class="list">
+        {#each studio.rooms as room (room.id)}
+          <li class:selected={room.id === studio.activeRoomId}>
+            <button
+              class="row"
+              onclick={() => studio.setActiveRoom(room.id)}
+              ondblclick={() => studio.setEditingRoomId(room.id)}
+            >
+              <span class="room-name">{room.name}</span>
+            </button>
+            <button
+              class="edit name-edit"
+              onclick={() => studio.setEditingRoomId(room.id)}
+              title="Renombrar"
+              aria-label="Renombrar habitación">✎</button
+            >
+            <span class="row-spacer"></span>
+            <button
+              class="edit area-edit"
+              onclick={() => onEditArea(room.id)}
+              disabled={studio.drawingRoomId !== null ||
+                studio.editingContourRoomId !== null ||
+                room.points.length < 2}
+              title="Editar área"
+              aria-label="Editar área"
+            >
+              <svg viewBox="0 0 14 14" width="14" height="14" aria-hidden="true">
+                <polygon
+                  points="3,3 10,2 12.5,7 9,12 3.5,11 1.5,7"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="1.6"
+                  stroke-linejoin="round"
+                />
+              </svg>
+            </button>
+            <button class="del" onclick={() => confirmRemoveRoom(room.id)} title="Eliminar"
+              >✕</button
+            >
+          </li>
+        {/each}
+      </ul>
+    {/if}
   </section>
 
   <section>
@@ -193,6 +236,79 @@
   {/if}
 </aside>
 
+{#if studio.editingRoomId !== null}
+  {@const editingRoom = studio.rooms.find((r) => r.id === studio.editingRoomId)}
+  {#if editingRoom}
+    <div class="rename-backdrop" role="presentation">
+      <div class="rename-modal" role="dialog" aria-modal="true">
+        <h3>Nombra tu habitación</h3>
+        <input
+          use:autofocus
+          class="rename-input"
+          type="text"
+          value={editingRoom.name}
+          onkeydown={(e) => {
+            if (e.key === 'Enter') {
+              e.preventDefault();
+              e.stopPropagation();
+              const v = (e.currentTarget as HTMLInputElement).value.trim();
+              if (v) saveRoomName(editingRoom.id, v);
+            } else if (e.key === 'Escape') {
+              e.preventDefault();
+              e.stopPropagation();
+            }
+          }}
+          onblur={(e) => {
+            if (studio.editingRoomId !== null) (e.currentTarget as HTMLInputElement).focus();
+          }}
+        />
+        <p class="rename-hint">Nombra a la habitación · Enter para guardar</p>
+      </div>
+    </div>
+  {/if}
+{/if}
+
+{#if studio.editingProject || !studio.projectName}
+  {@const isFirstTime = !studio.projectName}
+  <div class="rename-backdrop" role="presentation">
+    <div class="rename-modal" role="dialog" aria-modal="true">
+      <h3>{isFirstTime ? 'Nombra tu proyecto' : 'Renombrar proyecto'}</h3>
+      <input
+        use:autofocus
+        class="rename-input"
+        type="text"
+        value={studio.projectName}
+        placeholder="Ej. Mi Casa"
+        onkeydown={(e) => {
+          if (e.key === 'Enter') {
+            e.preventDefault();
+            e.stopPropagation();
+            const v = (e.currentTarget as HTMLInputElement).value.trim();
+            if (v) {
+              studio.setProjectName(v);
+              studio.setEditingProject(false);
+            }
+          } else if (e.key === 'Escape') {
+            e.preventDefault();
+            e.stopPropagation();
+            if (!isFirstTime) studio.setEditingProject(false);
+          }
+        }}
+        onblur={(e) => {
+          if (studio.editingProject || isFirstTime) (e.currentTarget as HTMLInputElement).focus();
+        }}
+      />
+      <p class="rename-hint">
+        {#if isFirstTime}
+          Nombra tu proyecto · Enter para empezar
+        {:else}
+          Enter para guardar · Esc para cancelar
+        {/if}
+      </p>
+    </div>
+  </div>
+{/if}
+
 <style>
   .panel {
     background: rgba(255, 255, 255, 0.6);
@@ -279,11 +395,12 @@
     color: #ffdd00;
   }
   .row {
-    flex: 1;
+    flex: 0 1 auto;
+    min-width: 0;
     display: flex;
     align-items: center;
     gap: 0.5rem;
-    padding: 0.4rem 0.6rem;
+    padding: 0.4rem 0.6rem 0.4rem 0.7rem;
     background: transparent;
     border: none;
     color: inherit;
@@ -292,21 +409,44 @@
     text-transform: capitalize;
     font: inherit;
   }
+  .row-spacer {
+    flex: 1;
+  }
+  .name-edit {
+    padding-left: 0.2rem;
+    padding-right: 0.2rem;
+  }
+  .area-edit {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .area-edit svg {
+    display: block;
+  }
+  .room-name {
+    flex: 1;
+    text-transform: none;
+    font-weight: 700;
+  }
   .dot {
     width: 12px;
     height: 12px;
     border-radius: 50%;
     border: 1px solid rgba(0, 0, 0, 0.3);
   }
-  .del {
+  .del,
+  .edit {
     background: transparent;
     border: none;
     color: inherit;
     opacity: 0.6;
     cursor: pointer;
-    padding: 0.4rem 0.6rem;
+    padding: 0.4rem 0.5rem;
+    font-size: 0.95rem;
   }
-  .del:hover {
+  .del:hover,
+  .edit:hover {
     opacity: 1;
   }
   .clear {
@@ -366,32 +506,118 @@
     accent-color: #1a1300;
   }
 
-  .io {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 0.4rem;
-  }
-  .io-btn {
+  .project-header {
     display: flex;
     align-items: center;
     justify-content: center;
     gap: 0.4rem;
-    padding: 0.5rem;
-    background: transparent;
-    color: #1a1300;
-    border: 2px solid #1a1300;
-    border-radius: 10px;
-    cursor: pointer;
-    font-weight: 800;
-    font-size: 0.78rem;
-    transition: background 0.12s, color 0.12s;
+    margin-bottom: 0.2rem;
   }
-  .io-btn:hover:not(:disabled) {
+  .project-name {
+    margin: 0;
+    color: #fff;
+    font-size: 1.2rem;
+    font-weight: 900;
+    letter-spacing: -0.01em;
+    text-transform: none;
+  }
+  .project-edit {
+    color: #fff;
+    opacity: 0.7;
+  }
+  .project-edit:hover {
+    opacity: 1;
+  }
+
+  .new-room-btn {
+    width: 100%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.5rem;
+    padding: 0.75rem;
     background: #1a1300;
     color: #ffdd00;
+    border: none;
+    border-radius: 12px;
+    cursor: pointer;
+    font-weight: 800;
+    font-size: 0.9rem;
+    letter-spacing: 0.02em;
+    transition: transform 0.1s, box-shadow 0.12s;
+    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.15);
   }
-  .io-btn:disabled {
+  .new-room-btn:hover:not(:disabled) {
+    transform: translateY(-1px);
+    box-shadow: 0 4px 10px rgba(0, 0, 0, 0.2);
+  }
+  .new-room-btn:disabled {
     opacity: 0.4;
     cursor: not-allowed;
+  }
+  .new-room-btn .icon {
+    font-size: 1.2rem;
+    font-weight: 900;
+  }
+
+  .rename-backdrop {
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.4);
+    backdrop-filter: blur(3px);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    /* Offset to roughly match the work-area: skip header on top, inspector on right */
+    padding: 5rem calc(340px + 2.25rem) 1.25rem 1.25rem;
+    z-index: 50;
+    animation: fadeIn 0.12s ease-out;
+  }
+  @keyframes fadeIn {
+    from {
+      opacity: 0;
+    }
+    to {
+      opacity: 1;
+    }
+  }
+  .rename-modal {
+    background: #fff;
+    padding: 1.5rem 1.75rem;
+    border-radius: 16px;
+    box-shadow: 0 18px 50px rgba(0, 0, 0, 0.35);
+    min-width: 380px;
+    max-width: 90vw;
+  }
+  .rename-modal h3 {
+    margin: 0 0 0.9rem;
+    font-size: 0.95rem;
+    font-weight: 800;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: #1a1300;
+  }
+  .rename-input {
+    width: 100%;
+    padding: 0.75rem 1rem;
+    border: 2px solid #1a1300;
+    border-radius: 12px;
+    font: inherit;
+    font-weight: 700;
+    font-size: 1.15rem;
+    color: #1a1300;
+    outline: none;
+    background: #fff;
+    box-sizing: border-box;
+  }
+  .rename-input:focus {
+    border-color: #f7a600;
+  }
+  .rename-hint {
+    margin: 0.7rem 0 0;
+    font-size: 0.7rem;
+    text-align: center;
+    opacity: 0.6;
+    letter-spacing: 0.04em;
   }
 </style>
