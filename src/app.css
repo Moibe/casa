@@ -89,6 +89,47 @@ body {
   background: #fff;
   color: #0c1e4a;
 }
+.theme-blueprint .panel .floor-group {
+  background: rgba(255, 255, 255, 0.05);
+  border-color: rgba(255, 255, 255, 0.25);
+}
+.theme-blueprint .panel .floor-group.floor-drop-target {
+  background: rgba(255, 255, 255, 0.18);
+  border-color: #fff;
+}
+.theme-blueprint .panel .floor-name {
+  color: #fff;
+}
+.theme-blueprint .panel .floor-name:hover {
+  background: rgba(255, 255, 255, 0.12);
+}
+.theme-blueprint .panel .floor-toggle:hover {
+  background: rgba(255, 255, 255, 0.12);
+}
+.theme-blueprint .panel .floor-name.active {
+  background: #fff;
+  color: #0c1e4a;
+}
+.theme-blueprint .panel .floor-count {
+  background: rgba(255, 255, 255, 0.18);
+  color: #fff;
+}
+.theme-blueprint .panel .floor-name.active .floor-count {
+  background: rgba(12, 30, 74, 0.18);
+  color: #0c1e4a;
+}
+.theme-blueprint .panel .floor-empty {
+  border-color: rgba(255, 255, 255, 0.3);
+  color: rgba(255, 255, 255, 0.65);
+}
+.theme-blueprint .panel .new-floor-btn {
+  color: #fff;
+  border-color: rgba(255, 255, 255, 0.45);
+}
+.theme-blueprint .panel .new-floor-btn:hover {
+  background: rgba(255, 255, 255, 0.08);
+  border-color: #fff;
+}
 .theme-blueprint .panel .clear {
   border-color: rgba(255, 255, 255, 0.4);
   color: #fff;

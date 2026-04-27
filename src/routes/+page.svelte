@@ -1,6 +1,7 @@
 <script lang="ts">
   import Scene from '$lib/Scene.svelte';
   import Inspector from '$lib/Inspector.svelte';
+  import ContextMenu from '$lib/ContextMenu.svelte';
   import { studio } from '$lib/studio.svelte';
   import { confirmStore } from '$lib/confirm.svelte';
 
@@ -129,6 +130,10 @@
           <span class="contour-prompt">
             <span class="step-num">1.</span> Dibuja el área de tu habitación
           </span>
+        {:else if studio.mandatoryWalls}
+          <span class="contour-prompt">
+            <span class="step-num">2.</span> Define la altura de las paredes
+          </span>
         {/if}
       </div>
     {/if}
@@ -162,6 +167,170 @@
           </button>
           <button class="contour-btn" onclick={() => studio.cancelEditingContour()}>
             <span>✕</span><span>Cancelar</span>
+          </button>
+        </div>
+      </div>
+    {/if}
+    {#if studio.wallsRoom && !studio.drawingRoom && !studio.editingContourRoom}
+      {@const wallsR = studio.wallsRoom}
+      {@const sel = studio.selectedWallEdge}
+      {@const heights = wallsR.wallHeights ?? []}
+      {@const currentHeight = sel === null ? heights[0] ?? 2.4 : heights[sel] ?? 2.4}
+      {@const openingsHere =
+        sel === null ? [] : (wallsR.openings ?? []).filter((o) => o.edgeIdx === sel)}
+      <div class="contour-controls">
+        <p class="contour-hint">
+          {#if studio.mandatoryWalls}
+            <strong>Paso 2.</strong> Define la altura de las paredes de {wallsR.name}.
+          {:else}
+            Modo <strong>Paredes</strong> en {wallsR.name} ·
+          {/if}
+          {#if sel === null}
+            Todas las paredes seleccionadas
+          {:else}
+            Pared {sel + 1} de {heights.length} seleccionada
+          {/if}
+        </p>
+        <div class="wall-height">
+          <input
+            type="range"
+            min="0.2"
+            max="5"
+            step="0.05"
+            value={currentHeight}
+            oninput={(e) =>
+              studio.setWallHeight(wallsR.id, sel, Number((e.currentTarget as HTMLInputElement).value))}
+          />
+          <span class="wall-height-value">{currentHeight.toFixed(2)} m</span>
+        </div>
+        {#if sel !== null}
+          <div class="openings-row">
+            <button class="contour-btn" onclick={() => studio.addOpening(wallsR.id, sel, 'door')}>
+              <span>🚪</span><span>+ Puerta</span>
+            </button>
+            <button
+              class="contour-btn"
+              onclick={() => studio.addOpening(wallsR.id, sel, 'window')}
+            >
+              <span>▭</span><span>+ Ventana</span>
+            </button>
+          </div>
+          {#if openingsHere.length > 0}
+            <ul class="openings-list">
+              {#each openingsHere as op (op.id)}
+                <li class:selected={studio.selectedOpeningId === op.id}>
+                  <button
+                    class="op-row"
+                    onclick={() =>
+                      studio.selectOpening(studio.selectedOpeningId === op.id ? null : op.id)}
+                  >
+                    <span class="op-icon">{op.kind === 'door' ? '🚪' : '▭'}</span>
+                    <span class="op-label">
+                      {op.kind === 'door' ? 'Puerta' : 'Ventana'}
+                      · {op.width.toFixed(2)} × {op.height.toFixed(2)} m
+                    </span>
+                  </button>
+                  <button
+                    class="op-del"
+                    onclick={() => studio.removeOpening(wallsR.id, op.id)}
+                    title="Eliminar"
+                    aria-label="Eliminar abertura">✕</button
+                  >
+                </li>
+              {/each}
+            </ul>
+          {/if}
+          {#if studio.selectedOpening}
+            {@const op = studio.selectedOpening}
+            {@const a = wallsR.points[op.edgeIdx]}
+            {@const b = wallsR.points[(op.edgeIdx + 1) % wallsR.points.length]}
+            {@const L = Math.hypot(b.x - a.x, b.z - a.z)}
+            {@const wH = wallsR.wallHeights?.[op.edgeIdx] ?? 2.4}
+            <div class="op-edit">
+              <label class="op-field">
+                <span class="op-field-label">Posición</span>
+                <input
+                  type="range"
+                  min="0.05"
+                  max={Math.max(0.05, L - 0.05 - op.width)}
+                  step="0.01"
+                  value={op.position}
+                  oninput={(e) =>
+                    studio.updateOpening(wallsR.id, op.id, {
+                      position: Number((e.currentTarget as HTMLInputElement).value)
+                    })}
+                />
+                <span class="op-value">{op.position.toFixed(2)} m</span>
+              </label>
+              <label class="op-field">
+                <span class="op-field-label">Base</span>
+                <input
+                  type="range"
+                  min="0"
+                  max={Math.max(0, wH - 0.05 - op.height)}
+                  step="0.01"
+                  value={op.bottom}
+                  oninput={(e) =>
+                    studio.updateOpening(wallsR.id, op.id, {
+                      bottom: Number((e.currentTarget as HTMLInputElement).value)
+                    })}
+                />
+                <span class="op-value">{op.bottom.toFixed(2)} m</span>
+              </label>
+              <label class="op-field">
+                <span class="op-field-label">Ancho</span>
+                <input
+                  type="range"
+                  min="0.2"
+                  max={Math.max(0.2, L - 0.1)}
+                  step="0.01"
+                  value={op.width}
+                  oninput={(e) =>
+                    studio.updateOpening(wallsR.id, op.id, {
+                      width: Number((e.currentTarget as HTMLInputElement).value)
+                    })}
+                />
+                <span class="op-value">{op.width.toFixed(2)} m</span>
+              </label>
+              <label class="op-field">
+                <span class="op-field-label">Alto</span>
+                <input
+                  type="range"
+                  min="0.2"
+                  max={Math.max(0.2, wH - 0.05 - op.bottom)}
+                  step="0.01"
+                  value={op.height}
+                  oninput={(e) =>
+                    studio.updateOpening(wallsR.id, op.id, {
+                      height: Number((e.currentTarget as HTMLInputElement).value)
+                    })}
+                />
+                <span class="op-value">{op.height.toFixed(2)} m</span>
+              </label>
+            </div>
+          {/if}
+        {/if}
+        <div class="contour-actions">
+          {#if sel !== null}
+            <button class="contour-btn" onclick={() => studio.selectWallEdge(null)}>
+              <span>⬚</span><span>Todas</span>
+            </button>
+          {/if}
+          <button class="contour-btn" onclick={() => studio.stopWalls()}>
+            <span>✓</span><span>Listo</span>
+          </button>
+        </div>
+      </div>
+    {/if}
+    {#if studio.furnishingRoom && !studio.drawingRoom && !studio.editingContourRoom}
+      {@const furnishing = studio.furnishingRoom}
+      <div class="contour-controls">
+        <p class="contour-hint">
+          Amueblando <strong>{furnishing.name}</strong>. Agrega objetos desde el panel lateral.
+        </p>
+        <div class="contour-actions">
+          <button class="contour-btn" onclick={() => studio.stopFurnishing()}>
+            <span>✓</span><span>Listo</span>
           </button>
         </div>
       </div>
@@ -220,6 +389,8 @@
 
   <Inspector />
 </main>
+
+<ContextMenu />
 
 <style>
   main {
@@ -340,6 +511,229 @@
   .contour-btn:disabled {
     opacity: 0.4;
     cursor: not-allowed;
+  }
+
+  .wall-height {
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+    width: 100%;
+    min-width: 280px;
+  }
+  .wall-height input[type='range'] {
+    flex: 1;
+    height: 24px;
+    background: transparent;
+    cursor: pointer;
+    -webkit-appearance: none;
+    appearance: none;
+  }
+  .wall-height input[type='range']::-webkit-slider-runnable-track {
+    height: 6px;
+    background: #1a1300;
+    border-radius: 999px;
+  }
+  .wall-height input[type='range']::-moz-range-track {
+    height: 6px;
+    background: #1a1300;
+    border-radius: 999px;
+  }
+  .wall-height input[type='range']::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    appearance: none;
+    width: 18px;
+    height: 18px;
+    border-radius: 50%;
+    background: #ffdd00;
+    border: 2px solid #1a1300;
+    margin-top: -6px;
+    cursor: pointer;
+  }
+  .wall-height input[type='range']::-moz-range-thumb {
+    width: 18px;
+    height: 18px;
+    border-radius: 50%;
+    background: #ffdd00;
+    border: 2px solid #1a1300;
+    cursor: pointer;
+  }
+  .wall-height-value {
+    font-weight: 800;
+    font-size: 0.82rem;
+    font-variant-numeric: tabular-nums;
+    background: #1a1300;
+    color: #ffdd00;
+    padding: 0.2rem 0.55rem;
+    border-radius: 6px;
+    min-width: 4.5rem;
+    text-align: center;
+  }
+  .openings-row {
+    display: flex;
+    gap: 0.4rem;
+  }
+  .openings-list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 0.2rem;
+    width: 100%;
+    max-height: 120px;
+    overflow-y: auto;
+  }
+  .openings-list li {
+    display: flex;
+    align-items: center;
+    gap: 0.3rem;
+    padding: 0.15rem 0.3rem;
+    background: rgba(26, 19, 0, 0.06);
+    border-radius: 6px;
+    font-size: 0.78rem;
+  }
+  .openings-list li.selected {
+    background: #1a1300;
+  }
+  .openings-list li.selected .op-label,
+  .openings-list li.selected .op-del {
+    color: #ffdd00;
+  }
+  :global(.theme-blueprint) .openings-list li {
+    background: rgba(255, 255, 255, 0.1);
+  }
+  :global(.theme-blueprint) .openings-list li.selected {
+    background: #fff;
+  }
+  :global(.theme-blueprint) .openings-list li.selected .op-label,
+  :global(.theme-blueprint) .openings-list li.selected .op-del {
+    color: #0c1e4a;
+  }
+  .op-row {
+    flex: 1;
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    background: transparent;
+    border: none;
+    padding: 0.15rem 0.2rem;
+    color: inherit;
+    cursor: pointer;
+    text-align: left;
+    font: inherit;
+  }
+  .op-icon {
+    font-size: 0.95rem;
+  }
+  .op-label {
+    flex: 1;
+    color: #1a1300;
+  }
+  .op-edit {
+    display: flex;
+    flex-direction: column;
+    gap: 0.3rem;
+    padding: 0.5rem 0.6rem;
+    background: rgba(26, 19, 0, 0.05);
+    border: 1px dashed rgba(26, 19, 0, 0.25);
+    border-radius: 8px;
+    min-width: 280px;
+  }
+  :global(.theme-blueprint) .op-edit {
+    background: rgba(255, 255, 255, 0.06);
+    border-color: rgba(255, 255, 255, 0.3);
+  }
+  .op-field {
+    display: grid;
+    grid-template-columns: 60px 1fr 60px;
+    align-items: center;
+    gap: 0.5rem;
+    font-size: 0.74rem;
+  }
+  .op-field-label {
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    font-weight: 700;
+    opacity: 0.75;
+    color: #1a1300;
+  }
+  :global(.theme-blueprint) .op-field-label {
+    color: #fff;
+  }
+  .op-value {
+    background: #1a1300;
+    color: #ffdd00;
+    padding: 0.1rem 0.4rem;
+    border-radius: 5px;
+    font-weight: 800;
+    font-variant-numeric: tabular-nums;
+    text-align: center;
+    font-size: 0.7rem;
+  }
+  :global(.theme-blueprint) .op-value {
+    background: #fff;
+    color: #0c1e4a;
+  }
+  .op-field input[type='range'] {
+    width: 100%;
+    height: 18px;
+    background: transparent;
+    cursor: pointer;
+    -webkit-appearance: none;
+    appearance: none;
+  }
+  .op-field input[type='range']::-webkit-slider-runnable-track {
+    height: 4px;
+    background: #1a1300;
+    border-radius: 999px;
+  }
+  .op-field input[type='range']::-moz-range-track {
+    height: 4px;
+    background: #1a1300;
+    border-radius: 999px;
+  }
+  .op-field input[type='range']::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    appearance: none;
+    width: 14px;
+    height: 14px;
+    border-radius: 50%;
+    background: #ffdd00;
+    border: 2px solid #1a1300;
+    margin-top: -5px;
+    cursor: pointer;
+  }
+  .op-field input[type='range']::-moz-range-thumb {
+    width: 14px;
+    height: 14px;
+    border-radius: 50%;
+    background: #ffdd00;
+    border: 2px solid #1a1300;
+    cursor: pointer;
+  }
+  :global(.theme-blueprint) .op-label {
+    color: #fff;
+  }
+  .op-del {
+    background: transparent;
+    border: none;
+    cursor: pointer;
+    padding: 0.15rem 0.4rem;
+    color: #1a1300;
+    opacity: 0.6;
+    border-radius: 4px;
+  }
+  :global(.theme-blueprint) .op-del {
+    color: #fff;
+  }
+  .op-del:hover {
+    opacity: 1;
+    background: rgba(185, 28, 28, 0.15);
+    color: #b91c1c;
+  }
+  :global(.theme-blueprint) .op-del:hover {
+    background: rgba(255, 138, 138, 0.18);
+    color: #ff8a8a;
   }
 
   .nav-arrow {
