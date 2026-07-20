@@ -466,6 +466,11 @@
     let draggingHandleIndex: number | null = null;
     let altDragPending: { nodeIdx: number } | null = null;
 
+    // Arrastre directo de muebles sobre el piso (X/Z) — reemplaza el gizmo de mover.
+    let draggingShapeId: string | null = null;
+    let dragStartHit: THREE.Vector3 | null = null;
+    let dragStartPos: { x: number; z: number } | null = null;
+
     // Feedback "aquí coinciden": realce verde + resplandor cuando un extremo suelto
     // está en posición de cerrar el contorno (misma condición que la fusión real).
     const SNAP_COLOR = 0x22e06a;
@@ -596,14 +601,9 @@
     const raycaster = new THREE.Raycaster();
     const pointer = new THREE.Vector2();
 
-    const moveT = new TransformControls(camera, renderer.domElement);
-    moveT.setMode('translate');
-    moveT.setSize(0.9);
-    moveT.showY = false;
-    const moveHelper = moveT.getHelper();
-    scene.add(moveHelper);
-    moveHelper.visible = false;
-
+    // No hay gizmo de mover: los muebles solo se mueven en 2D (X/Z), así que se
+    // arrastran directamente sobre el piso (ver draggingShapeId más abajo). Solo
+    // queda el anillo de rotación (compacto) y las asas de escalar.
     const rotateT = new TransformControls(camera, renderer.domElement);
     rotateT.setMode('rotate');
     rotateT.setSize(0.7);
@@ -620,15 +620,13 @@
     scene.add(scaleHelper);
     scaleHelper.visible = false;
 
-    const transforms = [moveT, rotateT, scaleT] as const;
+    const transforms = [rotateT, scaleT] as const;
 
     function applyHelperVisibility() {
-      const attached = !!moveT.object;
+      const attached = !!rotateT.object;
       if (!attached) {
-        moveHelper.visible = false;
         rotateHelper.visible = false;
         scaleHelper.visible = false;
-        moveT.enabled = false;
         rotateT.enabled = false;
         scaleT.enabled = false;
         return;
@@ -636,15 +634,12 @@
       const mode = studio.transformMode;
       const isMR = mode === 'move';
       const isS = mode === 'scale';
-      moveHelper.visible = isMR;
       rotateHelper.visible = isMR;
       scaleHelper.visible = isS;
-      moveT.enabled = isMR;
       rotateT.enabled = isMR;
       scaleT.enabled = isS;
     }
 
-    moveT.enabled = false;
     rotateT.enabled = false;
     scaleT.enabled = false;
 
@@ -716,12 +711,11 @@
         const m = meshes.get(sel.id)!;
         selectionRing.visible = true;
         selectionRing.position.copy(m.position);
+        // Cualquier selección (clic, teclado, o recién creado) deja listo el gizmo de
+        // rotar/escalar de inmediato, sin necesitar un clic extra sobre el mueble.
+        if (rotateT.object?.userData.id !== sel.id) attachGizmo(sel.id);
       } else {
         selectionRing.visible = false;
-        detachGizmo();
-      }
-
-      if (moveT.object && (!sel || moveT.object.userData.id !== sel.id)) {
         detachGizmo();
       }
     }
@@ -976,6 +970,27 @@
           }
         }
       }
+
+      // Iniciar arrastre directo de un mueble (solo en modo Mover, sin gizmo).
+      if (
+        !studio.editingContourRoomId &&
+        !studio.drawingRoomId &&
+        !studio.wallsRoomId &&
+        studio.transformMode === 'move'
+      ) {
+        const id = pickMesh(ev);
+        if (id) {
+          const shape = studio.shapes.find((s) => s.id === id);
+          const hit = pickFloor(ev);
+          if (shape && hit) {
+            draggingShapeId = id;
+            dragStartHit = hit.clone();
+            dragStartPos = { x: shape.position.x, z: shape.position.z };
+            controls.enabled = false;
+            renderer.domElement.setPointerCapture(ev.pointerId);
+          }
+        }
+      }
     }
 
     function onPointerUp(ev: PointerEvent) {
@@ -1019,7 +1034,26 @@
         }
         return;
       }
-      if (moveT.dragging || rotateT.dragging || scaleT.dragging) return;
+      if (draggingShapeId !== null) {
+        const draggedId = draggingShapeId;
+        draggingShapeId = null;
+        dragStartHit = null;
+        dragStartPos = null;
+        controls.enabled = true;
+        try {
+          renderer.domElement.releasePointerCapture(ev.pointerId);
+        } catch {
+          // noop
+        }
+        // Tanto un clic como un arrastre real dejan el mueble seleccionado con su gizmo.
+        studio.select(draggedId);
+        attachGizmo(draggedId);
+        if (!studio.furnishingRoomId && studio.activeRoomId) {
+          studio.startFurnishing(studio.activeRoomId);
+        }
+        return;
+      }
+      if (rotateT.dragging || scaleT.dragging) return;
       const dist = Math.hypot(ev.clientX - downX, ev.clientY - downY);
       const elapsed = performance.now() - downAt;
       if (dist > 5 || elapsed > 600) return;
@@ -1118,6 +1152,18 @@
           studio.updateRoomPoint(studio.editingContourRoomId, draggingHandleIndex, hit.x, hit.z);
         }
         updateSnapFeedback();
+        return;
+      }
+
+      if (draggingShapeId !== null) {
+        const hit = pickFloor(ev);
+        if (hit && dragStartHit && dragStartPos) {
+          const shape = studio.shapes.find((s) => s.id === draggingShapeId);
+          if (shape) {
+            shape.position.x = dragStartPos.x + (hit.x - dragStartHit.x);
+            shape.position.z = dragStartPos.z + (hit.z - dragStartHit.z);
+          }
+        }
         return;
       }
 
@@ -1236,6 +1282,28 @@
               studio.remove(id);
             }
           });
+      } else if (
+        !typing &&
+        !studio.drawingRoomId &&
+        !studio.editingContourRoomId &&
+        !studio.wallsRoomId &&
+        (ev.key === 'ArrowLeft' ||
+          ev.key === 'ArrowRight' ||
+          ev.key === 'ArrowUp' ||
+          ev.key === 'ArrowDown')
+      ) {
+        // Mover el mueble seleccionado con las flechas (mismos ejes que los cardinales N/S/E/O).
+        // Shift = salto de una cuadrícula completa (1 m); sin Shift = ajuste fino (0.1 m).
+        const sel = studio.selected;
+        if (sel) {
+          ev.preventDefault();
+          const step = ev.shiftKey ? 1 : 0.1;
+          const round = (n: number) => Math.round(n * 1000) / 1000;
+          if (ev.key === 'ArrowLeft') sel.position.x = round(sel.position.x - step);
+          else if (ev.key === 'ArrowRight') sel.position.x = round(sel.position.x + step);
+          else if (ev.key === 'ArrowUp') sel.position.z = round(sel.position.z - step);
+          else if (ev.key === 'ArrowDown') sel.position.z = round(sel.position.z + step);
+        }
       } else if (!typing && (ev.key === 'm' || ev.key === 'M')) studio.setTransformMode('move');
       else if (!typing && (ev.key === 'e' || ev.key === 'E')) studio.setTransformMode('scale');
     }
