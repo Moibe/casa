@@ -303,6 +303,10 @@
       clearWalls();
       const room = studio.activeRoom;
       if (!room || !room.closed || !room.wallHeights) return;
+      // Al editar el contorno (dimensiones) ocultamos las paredes para ver el plano limpio en cenital.
+      if (studio.editingContourRoomId) return;
+      // En modo Amueblar, el usuario puede ocultarlas para ver/tomar muebles sin estorbo.
+      if (studio.furnishingRoomId === room.id && studio.furnishingWallsHidden) return;
       const N = room.points.length;
       if (N < 2) return;
       const inWalls = studio.wallsRoomId === room.id;
@@ -461,6 +465,56 @@
     const handles: THREE.Mesh[] = [];
     let draggingHandleIndex: number | null = null;
     let altDragPending: { nodeIdx: number } | null = null;
+
+    // Feedback "aquí coinciden": realce verde + resplandor cuando un extremo suelto
+    // está en posición de cerrar el contorno (misma condición que la fusión real).
+    const SNAP_COLOR = 0x22e06a;
+    const handleSnapMat = new THREE.MeshBasicMaterial({ color: SNAP_COLOR });
+    const snapHaloMat = new THREE.MeshBasicMaterial({
+      color: SNAP_COLOR,
+      transparent: true,
+      opacity: 0.32,
+      depthWrite: false,
+      depthTest: false
+    });
+    const snapHalo = new THREE.Mesh(new THREE.SphereGeometry(0.34, 20, 16), snapHaloMat);
+    snapHalo.visible = false;
+    snapHalo.renderOrder = 6;
+    scene.add(snapHalo);
+
+    function resetSnapFeedback() {
+      for (const h of handles) {
+        h.material = handleMat;
+        h.scale.setScalar(1);
+      }
+      snapHalo.visible = false;
+    }
+
+    function updateSnapFeedback() {
+      resetSnapFeedback();
+      if (draggingHandleIndex === null || !studio.editingContourRoomId) return;
+      const room = studio.editingContourRoom;
+      if (!room || room.closed || room.points.length < 4) return;
+      const N = room.points.length;
+      const idx = draggingHandleIndex;
+      if (idx !== 0 && idx !== N - 1) return;
+      const otherIdx = idx === 0 ? N - 1 : 0;
+      const a = room.points[idx];
+      const b = room.points[otherIdx];
+      const dx = a.x - b.x;
+      const dz = a.z - b.z;
+      if (dx * dx + dz * dz >= CLOSE_DIST_SQ) return;
+      // ¡Coinciden! Realzar ambos extremos y encender el resplandor sobre el destino.
+      for (const i of [idx, otherIdx]) {
+        const h = handles[i];
+        if (h) {
+          h.material = handleSnapMat;
+          h.scale.setScalar(1.6);
+        }
+      }
+      snapHalo.position.set(b.x, ROOM_Y + 0.02, b.z);
+      snapHalo.visible = true;
+    }
 
     function syncHandles() {
       const editingRoom = studio.editingContourRoom;
@@ -808,6 +862,9 @@
         studio.activeRoomId;
         studio.wallsRoomId;
         studio.selectedWallEdge;
+        studio.editingContourRoomId;
+        studio.furnishingRoomId;
+        studio.furnishingWallsHidden;
         syncWalls();
       });
       $effect(() => {
@@ -952,6 +1009,7 @@
             }
           }
         }
+        resetSnapFeedback();
         draggingHandleIndex = null;
         controls.enabled = true;
         try {
@@ -992,6 +1050,15 @@
 
       const id = pickMesh(ev);
       studio.select(id);
+      // Un solo clic sobre un mueble ya lo agarra con el gizmo (mover/rotar/escalar).
+      if (id) {
+        attachGizmo(id);
+        if (!studio.furnishingRoomId && studio.activeRoomId) {
+          studio.startFurnishing(studio.activeRoomId);
+        }
+      } else {
+        detachGizmo();
+      }
     }
 
     function hideLengthLabel() {
@@ -1050,6 +1117,7 @@
         if (hit) {
           studio.updateRoomPoint(studio.editingContourRoomId, draggingHandleIndex, hit.x, hit.z);
         }
+        updateSnapFeedback();
         return;
       }
 
@@ -1229,6 +1297,11 @@
       } else {
         controls.update();
       }
+      if (snapHalo.visible) {
+        const wave = Math.sin(now * 0.008);
+        snapHalo.scale.setScalar(1 + wave * 0.18);
+        snapHaloMat.opacity = 0.28 + (wave + 1) * 0.11;
+      }
       renderer.render(scene, camera);
       raf = requestAnimationFrame(tick);
     };
@@ -1260,6 +1333,9 @@
       previewMat.dispose();
       handleGeo.dispose();
       handleMat.dispose();
+      handleSnapMat.dispose();
+      snapHalo.geometry.dispose();
+      snapHaloMat.dispose();
       clearWalls();
       wallMat.dispose();
       wallSelectedMat.dispose();

@@ -1,9 +1,39 @@
 <script lang="ts">
+  import { onMount } from 'svelte';
   import Scene from '$lib/Scene.svelte';
   import Inspector from '$lib/Inspector.svelte';
   import ContextMenu from '$lib/ContextMenu.svelte';
   import { studio } from '$lib/studio.svelte';
   import { confirmStore } from '$lib/confirm.svelte';
+  import type { PageData } from './$types';
+
+  let { data }: { data: PageData } = $props();
+
+  let hydrated = $state(false);
+
+  let sidebarCollapsed = $state(
+    typeof localStorage !== 'undefined' && localStorage.getItem('casa:sidebarCollapsed') === '1'
+  );
+  $effect(() => {
+    if (typeof localStorage === 'undefined') return;
+    try {
+      localStorage.setItem('casa:sidebarCollapsed', sidebarCollapsed ? '1' : '0');
+    } catch {
+      // ignore
+    }
+  });
+
+  onMount(() => {
+    // Hidratar del servidor + migrar localStorage (una vez) + crear proyecto si no hay ninguno.
+    void studio.init(data.user.id, data.projects).then(() => {
+      hydrated = true;
+    });
+    const flush = () => {
+      void studio.flush();
+    };
+    window.addEventListener('beforeunload', flush);
+    return () => window.removeEventListener('beforeunload', flush);
+  });
 
   $effect(() => {
     if (typeof document === 'undefined') return;
@@ -11,6 +41,31 @@
   });
 
   let fileInput: HTMLInputElement;
+
+  let projectMenuOpen = $state(false);
+
+  function onWindowClick(e: MouseEvent) {
+    if (!projectMenuOpen) return;
+    const root = document.querySelector('.projects');
+    if (root && !root.contains(e.target as Node)) projectMenuOpen = false;
+  }
+
+  async function confirmDeleteProject(id: string, name: string) {
+    projectMenuOpen = false;
+    const ok = await confirmStore.ask({
+      title: 'Eliminar proyecto',
+      message: `Se eliminará el proyecto "${name || 'Sin nombre'}" con todas sus habitaciones y objetos. Esta acción no se puede deshacer.`,
+      confirmText: 'Eliminar',
+      danger: true
+    });
+    if (ok) studio.deleteProject(id);
+  }
+
+  function renameProject(id: string) {
+    studio.switchProject(id);
+    projectMenuOpen = false;
+    studio.setEditingProject(true);
+  }
 
   function exportScene() {
     const json = studio.serialize();
@@ -66,7 +121,79 @@
   }
 </script>
 
-<div class="top-right">
+<svelte:window onclick={onWindowClick} />
+
+{#if hydrated}
+<header class="topbar">
+  <h1 class="brand">Casa 🏠</h1>
+  <div class="top-right">
+  {#if studio.saveStatus === 'saving'}
+    <span class="save-status">Guardando…</span>
+  {:else if studio.saveStatus === 'saved'}
+    <span class="save-status ok">Guardado ✓</span>
+  {:else if studio.saveStatus === 'error'}
+    <span class="save-status err">Error al guardar</span>
+  {/if}
+  <div class="projects">
+    <button
+      class="projects-btn"
+      onclick={() => (projectMenuOpen = !projectMenuOpen)}
+      title="Proyectos"
+    >
+      <span class="proj-icon">🗂</span>
+      <span class="proj-name">{studio.projectName || 'Sin nombre'}</span>
+      <span class="proj-caret" class:open={projectMenuOpen}>▾</span>
+    </button>
+
+    {#if projectMenuOpen}
+      <div class="project-menu">
+        <p class="project-menu-title">
+          Proyectos <span class="pcount">{studio.projects.length}</span>
+        </p>
+        <ul class="project-menu-list">
+          {#each studio.projects as p (p.id)}
+            <li class:active={p.id === studio.currentProjectId}>
+              <button
+                class="project-menu-item"
+                onclick={() => {
+                  studio.switchProject(p.id);
+                  projectMenuOpen = false;
+                }}
+              >
+                <span class="project-dot" class:on={p.id === studio.currentProjectId}></span>
+                <span class="project-menu-name">{p.name || 'Sin nombre'}</span>
+              </button>
+              <button
+                class="project-menu-rename"
+                onclick={() => renameProject(p.id)}
+                title="Renombrar proyecto"
+                aria-label="Renombrar proyecto">✎</button
+              >
+              <button
+                class="project-menu-del"
+                disabled={studio.projects.length <= 1}
+                onclick={() => confirmDeleteProject(p.id, p.name)}
+                title={studio.projects.length <= 1
+                  ? 'No puedes eliminar el único proyecto'
+                  : 'Eliminar proyecto'}
+                aria-label="Eliminar proyecto">✕</button
+              >
+            </li>
+          {/each}
+        </ul>
+        <button
+          class="project-menu-new"
+          onclick={() => {
+            studio.createProject();
+            projectMenuOpen = false;
+          }}
+        >
+          <span class="icon">＋</span><span>Nuevo proyecto</span>
+        </button>
+      </div>
+    {/if}
+  </div>
+
   <div class="archive">
     <button
       class="archive-btn"
@@ -114,13 +241,20 @@
   >
     <span class="thumb">{studio.theme === 'blueprint' ? '📐' : '🟡'}</span>
   </button>
-</div>
 
-<main>
-  <header>
-    <h1>Casa 🏠</h1>
-  </header>
+  <form method="POST" action="?/logout" class="user-menu">
+    <span class="user-email" title={data.user.email}>{data.user.email}</span>
+    <button type="submit" class="logout-btn" title="Cerrar sesión">Salir</button>
+  </form>
+  </div>
+</header>
 
+<Inspector
+  collapsed={sidebarCollapsed}
+  toggleCollapsed={() => (sidebarCollapsed = !sidebarCollapsed)}
+/>
+
+<main class:collapsed={sidebarCollapsed}>
   <section class="stage">
     <Scene />
     {#if studio.activeRoom}
@@ -329,6 +463,16 @@
           Amueblando <strong>{furnishing.name}</strong>. Agrega objetos desde el panel lateral.
         </p>
         <div class="contour-actions">
+          <button
+            class="contour-btn"
+            class:active={studio.furnishingWallsHidden}
+            onclick={() => studio.toggleFurnishingWallsHidden()}
+            title={studio.furnishingWallsHidden ? 'Mostrar paredes' : 'Ocultar paredes'}
+          >
+            <span>{studio.furnishingWallsHidden ? '◱' : '⬚'}</span><span
+              >{studio.furnishingWallsHidden ? 'Mostrar paredes' : 'Ocultar paredes'}</span
+            >
+          </button>
           <button class="contour-btn" onclick={() => studio.stopFurnishing()}>
             <span>✓</span><span>Listo</span>
           </button>
@@ -386,35 +530,49 @@
       >
     {/if}
   </section>
-
-  <Inspector />
 </main>
 
 <ContextMenu />
+{:else}
+  <div class="app-loading">Cargando…</div>
+{/if}
 
 <style>
-  main {
-    display: grid;
-    grid-template-columns: 1fr 340px;
-    grid-template-rows: auto 1fr;
-    gap: 1rem;
-    padding: 1.25rem;
-    height: 100vh;
-  }
-
-  header {
-    grid-column: 1 / -1;
+  /* Barra superior full-width: marca (izq) + chips (der), a todo lo ancho de la página. */
+  .topbar {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    height: var(--topbar-h);
+    z-index: 20;
     display: flex;
-    align-items: baseline;
+    align-items: center;
+    justify-content: space-between;
     gap: 1rem;
-    flex-wrap: wrap;
+    padding: 0 1rem;
+    box-sizing: border-box;
   }
-
-  h1 {
+  .brand {
     margin: 0;
-    font-size: clamp(1.5rem, 3vw, 2.25rem);
+    font-size: clamp(1.4rem, 2.4vw, 1.9rem);
     font-weight: 900;
     letter-spacing: -0.02em;
+    color: var(--ink);
+    white-space: nowrap;
+  }
+
+  main {
+    display: grid;
+    height: 100vh;
+    box-sizing: border-box;
+    /* Empieza debajo de la topbar; el lienzo se corre a la derecha de la barra glass. */
+    padding: calc(var(--topbar-h) + 1rem) 1rem 1rem 0;
+    margin-left: calc(var(--sidebar-width, 340px) + 2rem);
+    transition: margin-left 0.18s ease-out;
+  }
+  main.collapsed {
+    margin-left: 3.75rem;
   }
 
   .empty-state {
@@ -505,6 +663,10 @@
     transition: background 0.12s, color 0.12s;
   }
   .contour-btn:hover:not(:disabled) {
+    background: #1a1300;
+    color: #ffdd00;
+  }
+  .contour-btn.active {
     background: #1a1300;
     color: #ffdd00;
   }
@@ -828,13 +990,189 @@
   }
 
   .top-right {
-    position: fixed;
-    top: 1rem;
-    right: 1rem;
     display: flex;
     align-items: center;
     gap: 0.6rem;
-    z-index: 20;
+  }
+
+  .projects {
+    position: relative;
+    display: flex;
+    background: rgba(255, 255, 255, 0.55);
+    border: 2px solid #1a1300;
+    border-radius: 999px;
+    padding: 2px;
+    backdrop-filter: blur(4px);
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
+  }
+  .projects-btn {
+    height: 26px;
+    max-width: 200px;
+    padding: 0 0.7rem;
+    background: transparent;
+    border: none;
+    border-radius: 999px;
+    color: #1a1300;
+    font-weight: 700;
+    font-size: 0.72rem;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    gap: 0.35rem;
+  }
+  .projects-btn:hover {
+    background: rgba(26, 19, 0, 0.08);
+  }
+  .proj-icon {
+    font-size: 0.85rem;
+  }
+  .proj-name {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .proj-caret {
+    font-size: 0.6rem;
+    opacity: 0.7;
+    transition: transform 0.15s;
+  }
+  .proj-caret.open {
+    transform: rotate(180deg);
+  }
+
+  .project-menu {
+    position: absolute;
+    top: calc(100% + 0.4rem);
+    left: 0;
+    width: 240px;
+    z-index: 30;
+    display: flex;
+    flex-direction: column;
+    gap: 0.35rem;
+    padding: 0.6rem;
+    background: #fff;
+    border: 2px solid var(--ink);
+    border-radius: 14px;
+    box-shadow: 0 12px 32px rgba(0, 0, 0, 0.28);
+  }
+  .project-menu-title {
+    margin: 0 0 0.15rem;
+    font-size: 0.66rem;
+    font-weight: 800;
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    opacity: 0.7;
+    color: var(--ink);
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+  }
+  .pcount {
+    background: var(--ink);
+    color: var(--safety-yellow);
+    border-radius: 999px;
+    padding: 0.05rem 0.45rem;
+    font-size: 0.62rem;
+  }
+  .project-menu-list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 0.2rem;
+    max-height: 260px;
+    overflow-y: auto;
+  }
+  .project-menu-list li {
+    display: flex;
+    align-items: center;
+    border-radius: 8px;
+    background: rgba(26, 19, 0, 0.06);
+  }
+  .project-menu-list li.active {
+    background: var(--ink);
+  }
+  .project-menu-item {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.45rem 0.55rem;
+    background: transparent;
+    border: none;
+    color: var(--ink);
+    cursor: pointer;
+    text-align: left;
+    font: inherit;
+    font-weight: 700;
+    font-size: 0.8rem;
+  }
+  .project-menu-list li.active .project-menu-item {
+    color: var(--safety-yellow);
+  }
+  .project-menu-name {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .project-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    border: 1.5px solid currentColor;
+    flex: none;
+    opacity: 0.5;
+  }
+  .project-dot.on {
+    background: currentColor;
+    opacity: 1;
+  }
+  .project-menu-rename,
+  .project-menu-del {
+    background: transparent;
+    border: none;
+    color: inherit;
+    opacity: 0.5;
+    cursor: pointer;
+    padding: 0.35rem 0.4rem;
+    font-size: 0.82rem;
+  }
+  .project-menu-rename:hover {
+    opacity: 1;
+  }
+  .project-menu-del:hover:not(:disabled) {
+    opacity: 1;
+    color: #b91c1c;
+  }
+  .project-menu-list li.active .project-menu-rename,
+  .project-menu-list li.active .project-menu-del {
+    color: var(--safety-yellow);
+  }
+  .project-menu-del:disabled {
+    opacity: 0.25;
+    cursor: not-allowed;
+  }
+  .project-menu-new {
+    margin-top: 0.15rem;
+    width: 100%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.35rem;
+    padding: 0.5rem;
+    background: var(--ink);
+    color: var(--safety-yellow);
+    border: none;
+    border-radius: 10px;
+    cursor: pointer;
+    font-weight: 800;
+    font-size: 0.74rem;
+  }
+  .project-menu-new .icon {
+    font-size: 1rem;
+    font-weight: 900;
   }
 
   .archive {
@@ -940,5 +1278,72 @@
   .theme-switch.on .thumb {
     background: #0c1e4a;
     transform: translateX(26px);
+  }
+
+  .user-menu {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    height: 30px;
+    padding: 0 0.35rem 0 0.7rem;
+    background: rgba(255, 255, 255, 0.55);
+    border: 2px solid #1a1300;
+    border-radius: 999px;
+    backdrop-filter: blur(4px);
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
+  }
+  .user-email {
+    max-width: 140px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 0.72rem;
+    font-weight: 700;
+    color: #1a1300;
+  }
+  .logout-btn {
+    height: 22px;
+    padding: 0 0.6rem;
+    background: #1a1300;
+    color: #ffdd00;
+    border: none;
+    border-radius: 999px;
+    font: inherit;
+    font-weight: 800;
+    font-size: 0.68rem;
+    cursor: pointer;
+  }
+  .logout-btn:hover {
+    opacity: 0.85;
+  }
+
+  .save-status {
+    font-size: 0.75rem;
+    font-weight: 700;
+    padding: 0.15rem 0.55rem;
+    border-radius: 999px;
+    background: rgba(26, 19, 0, 0.1);
+    color: rgba(26, 19, 0, 0.7);
+    align-self: center;
+  }
+  .save-status.ok {
+    background: rgba(22, 163, 74, 0.15);
+    color: #16a34a;
+  }
+  .save-status.err {
+    background: rgba(185, 28, 28, 0.15);
+    color: #b91c1c;
+  }
+
+  .app-loading {
+    position: fixed;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 1rem;
+    font-weight: 700;
+    color: var(--ink);
+    opacity: 0.7;
   }
 </style>

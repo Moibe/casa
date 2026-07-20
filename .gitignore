@@ -5,6 +5,12 @@ node_modules
 .env
 .env.*
 !.env.example
+
+# Base de datos local (SQLite)
+casa.db
+casa.db-*
+*.sqlite
+*.sqlite-*
 vite.config.js.timestamp-*
 vite.config.ts.timestamp-*
 

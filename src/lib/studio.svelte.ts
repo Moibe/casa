@@ -84,7 +84,16 @@ function makeShape(kind: ShapeKind, roomId: string): Shape {
   };
 }
 
-const STORAGE_KEY = 'threejs-svelte:studio:v1';
+const LEGACY_KEY = 'threejs-svelte:studio:v1';
+const INDEX_KEY = 'casa:index:v1';
+const projectKey = (id: string) => `casa:project:${id}`;
+
+export type ProjectMeta = { id: string; name: string };
+type WorkspaceIndex = { version: number; currentId: string | null; projects: ProjectMeta[] };
+
+export type HydratePayload = {
+  projects: { id: string; name: string; data: string; version: number }[];
+};
 
 function sanitizeRooms(input: unknown, indexBase = 1): Room[] {
   if (!Array.isArray(input)) return [];
@@ -295,8 +304,21 @@ function migrate(parsed: {
   };
 }
 
-function loadInitial(): LoadedState {
-  const fallback: LoadedState = {
+// El tema es una preferencia GLOBAL (no por proyecto). Default: azul (blueprint).
+function initialTheme(): Theme {
+  if (typeof localStorage !== 'undefined') {
+    try {
+      const t = localStorage.getItem('casa:theme');
+      if (t === 'blueprint' || t === 'default') return t;
+    } catch {
+      // ignore
+    }
+  }
+  return 'blueprint';
+}
+
+function emptyState(): LoadedState {
+  return {
     shapes: [],
     selectedId: null,
     viewMode: 'perspective',
@@ -307,15 +329,54 @@ function loadInitial(): LoadedState {
     activeFloorId: null,
     projectName: ''
   };
-  if (typeof localStorage === 'undefined') return fallback;
+}
+
+function readIndex(): WorkspaceIndex | null {
   try {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    if (!raw) return fallback;
+    const raw = localStorage.getItem(INDEX_KEY);
+    if (!raw) return null;
     const parsed = JSON.parse(raw);
-    return migrate(parsed);
+    if (!parsed || !Array.isArray(parsed.projects)) return null;
+    const projects: ProjectMeta[] = [];
+    for (const p of parsed.projects) {
+      if (p && typeof p.id === 'string') {
+        projects.push({ id: p.id, name: typeof p.name === 'string' ? p.name : '' });
+      }
+    }
+    return {
+      version: Number(parsed.version) || 1,
+      currentId: typeof parsed.currentId === 'string' ? parsed.currentId : null,
+      projects
+    };
   } catch {
-    return fallback;
+    return null;
   }
+}
+
+// Recoge los proyectos que hoy viven en localStorage (para subirlos al servidor una sola vez).
+function collectLocalProjects(): { localId: string; name: string; data: string }[] {
+  if (typeof localStorage === 'undefined') return [];
+  const out: { localId: string; name: string; data: string }[] = [];
+  const index = readIndex();
+  if (index) {
+    for (const p of index.projects) {
+      const raw = localStorage.getItem(projectKey(p.id));
+      if (raw) out.push({ localId: p.id, name: p.name || 'Proyecto', data: raw });
+    }
+  }
+  // Blob antiguo de un solo proyecto que nunca se plegó a un índice.
+  const legacy = localStorage.getItem(LEGACY_KEY);
+  if (legacy) {
+    let name = 'Mi Casa';
+    try {
+      const m = migrate(JSON.parse(legacy));
+      if (m.projectName) name = m.projectName;
+    } catch {
+      // ignore
+    }
+    out.push({ localId: 'legacy', name, data: legacy });
+  }
+  return out;
 }
 
 function nextRoomName(existing: Room[]): string {
@@ -334,20 +395,39 @@ function nextFloorName(existing: Floor[]): string {
   return `Piso ${i}`;
 }
 
+function nextProjectName(existing: ProjectMeta[]): string {
+  const used = new Set(existing.map((p) => p.name));
+  let i = existing.length + 1;
+  while (used.has(`Proyecto ${i}`)) i++;
+  return `Proyecto ${i}`;
+}
+
 function createStudio() {
-  const initial = loadInitial();
-  let shapes = $state<Shape[]>(initial.shapes);
-  let selectedId = $state<string | null>(initial.selectedId);
-  let viewMode = $state<ViewMode>(initial.viewMode);
-  let rooms = $state<Room[]>(initial.rooms);
-  let floors = $state<Floor[]>(initial.floors);
+  // El store arranca VACÍO; el editor lo hidrata desde el servidor en onMount (client-only).
+  // Nunca leemos datos de usuario aquí en tiempo de import (así el estado nunca toca el servidor/SSR).
+  let projectList = $state<ProjectMeta[]>([]);
+  let currentProjectId = $state<string>('');
+  let shapes = $state<Shape[]>([]);
+  let selectedId = $state<string | null>(null);
+  let viewMode = $state<ViewMode>('perspective');
+  let rooms = $state<Room[]>([]);
+  let floors = $state<Floor[]>([]);
   let drawingRoomId = $state<string | null>(null);
   let mandatoryContour = $state<boolean>(false);
-  let theme = $state<Theme>(initial.theme);
-  let activeRoomId = $state<string | null>(initial.activeRoomId);
-  let activeFloorId = $state<string | null>(initial.activeFloorId);
+  let theme = $state<Theme>(initialTheme());
+  let activeRoomId = $state<string | null>(null);
+  let activeFloorId = $state<string | null>(null);
   let editingFloorId = $state<string | null>(null);
-  let projectName = $state<string>(initial.projectName);
+  let projectName = $state<string>('');
+
+  // Persistencia al servidor (todo client-side).
+  let currentUserId = '';
+  const stateCache = new Map<string, LoadedState>();
+  const versions = new Map<string, number>();
+  const lastSaved = new Map<string, string>();
+  let saveStatus = $state<'idle' | 'saving' | 'saved' | 'error'>('idle');
+  let pending: { id: string; name: string; snapshot: string } | null = null;
+  let saveTimer: ReturnType<typeof setTimeout> | null = null;
 
   function ensureDefaultFloor(): string {
     if (floors.length === 0) {
@@ -367,6 +447,7 @@ function createStudio() {
   let editingContourRoomId = $state<string | null>(null);
   let contourBackup: RoomPoint[] | null = null;
   let furnishingRoomId = $state<string | null>(null);
+  let furnishingWallsHidden = $state<boolean>(false);
   let transformMode = $state<TransformMode>('move');
   let wallsRoomId = $state<string | null>(null);
   let selectedWallEdge = $state<number | null>(null);
@@ -390,26 +471,270 @@ function createStudio() {
     mandatoryWalls = mandatory;
   }
 
+  // Serializa un proyecto SIN campos transitorios (selectedId no cuenta como "cambio").
+  function serializeState(s: LoadedState): string {
+    return JSON.stringify({
+      shapes: s.shapes,
+      viewMode: s.viewMode,
+      rooms: s.rooms,
+      floors: s.floors,
+      activeRoomId: s.activeRoomId,
+      activeFloorId: s.activeFloorId,
+      projectName: s.projectName
+    });
+  }
+
+  function currentLoadedState(): LoadedState {
+    return {
+      shapes,
+      selectedId: null,
+      viewMode,
+      rooms,
+      floors,
+      theme,
+      activeRoomId,
+      activeFloorId,
+      projectName
+    };
+  }
+
+  function snapshotState(): string {
+    return serializeState(currentLoadedState());
+  }
+
+  function saveCurrentToCache() {
+    if (currentProjectId) stateCache.set(currentProjectId, currentLoadedState());
+  }
+
+  function rememberLastOpened(id: string) {
+    if (typeof localStorage === 'undefined' || !currentUserId) return;
+    try {
+      localStorage.setItem(`casa:lastOpened:${currentUserId}`, id);
+    } catch {
+      // ignore
+    }
+  }
+
+  // Swap all reactive state to a freshly loaded project and clear transient modes.
+  function applyLoadedState(s: LoadedState) {
+    shapes = s.shapes;
+    selectedId = null;
+    viewMode = s.viewMode;
+    rooms = s.rooms;
+    floors = s.floors;
+    activeRoomId = s.activeRoomId;
+    activeFloorId = s.activeFloorId;
+    projectName = s.projectName;
+    drawingRoomId = null;
+    mandatoryContour = false;
+    editingFloorId = null;
+    editingRoomId = null;
+    isCreatingNewRoom = false;
+    editingProject = false;
+    editingContourRoomId = null;
+    contourBackup = null;
+    furnishingRoomId = null;
+    wallsRoomId = null;
+    selectedWallEdge = null;
+    selectedOpeningId = null;
+    mandatoryWalls = false;
+  }
+
+  async function putProject(id: string, name: string, snapshot: string, retry = 0): Promise<void> {
+    const version = versions.get(id) ?? 0;
+    try {
+      const res = await fetch(`/api/projects/${id}`, {
+        method: 'PUT',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ name, data: snapshot, version })
+      });
+      if (res.status === 409 && retry < 2) {
+        const body = await res.json().catch(() => null);
+        if (body && typeof body.serverVersion === 'number') {
+          versions.set(id, body.serverVersion);
+          return putProject(id, name, snapshot, retry + 1);
+        }
+      }
+      if (!res.ok) {
+        saveStatus = 'error';
+        return;
+      }
+      const body = await res.json().catch(() => null);
+      if (body && typeof body.version === 'number') versions.set(id, body.version);
+      lastSaved.set(id, snapshot);
+      if (!pending) saveStatus = 'saved';
+    } catch {
+      saveStatus = 'error';
+    }
+  }
+
+  async function apiCreate(id: string, name: string, snapshot: string): Promise<void> {
+    try {
+      const res = await fetch('/api/projects', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ id, name, data: snapshot })
+      });
+      if (!res.ok) {
+        saveStatus = 'error';
+        return;
+      }
+      const body = await res.json().catch(() => null);
+      versions.set(id, body && typeof body.version === 'number' ? body.version : 0);
+      lastSaved.set(id, snapshot);
+      if (!pending) saveStatus = 'saved';
+    } catch {
+      saveStatus = 'error';
+    }
+  }
+
+  function apiDelete(id: string): void {
+    void fetch(`/api/projects/${id}`, { method: 'DELETE' }).catch(() => {});
+  }
+
+  function scheduleSave(id: string, name: string, snapshot: string) {
+    pending = { id, name, snapshot };
+    saveStatus = 'saving';
+    if (saveTimer) clearTimeout(saveTimer);
+    saveTimer = setTimeout(() => {
+      void flushSave();
+    }, 900);
+  }
+
+  async function flushSave(): Promise<void> {
+    if (saveTimer) {
+      clearTimeout(saveTimer);
+      saveTimer = null;
+    }
+    const p = pending;
+    pending = null;
+    if (!p) return;
+    if (lastSaved.get(p.id) === p.snapshot) {
+      saveStatus = 'saved';
+      return;
+    }
+    await putProject(p.id, p.name, p.snapshot);
+  }
+
+  function createProjectInternal(name?: string): string {
+    saveCurrentToCache();
+    void flushSave();
+    const id = crypto.randomUUID();
+    const finalName = (name && name.trim()) || nextProjectName(projectList);
+    const st = emptyState();
+    st.projectName = finalName;
+    stateCache.set(id, st);
+    versions.set(id, 0);
+    const snap = serializeState(st);
+    lastSaved.set(id, snap);
+    projectList = [...projectList, { id, name: finalName }];
+    applyLoadedState(st);
+    projectName = finalName;
+    currentProjectId = id;
+    rememberLastOpened(id);
+    void apiCreate(id, finalName, snap);
+    return id;
+  }
+
+  // Poblar el workspace desde datos del servidor. Solo se llama en cliente (onMount).
+  function hydrateInternal(userId: string, payload: HydratePayload) {
+    currentUserId = userId;
+    stateCache.clear();
+    versions.clear();
+    lastSaved.clear();
+    const metas: ProjectMeta[] = [];
+    for (const p of payload.projects) {
+      let st: LoadedState;
+      try {
+        st = migrate(JSON.parse(p.data));
+      } catch {
+        st = emptyState();
+      }
+      st.projectName = p.name;
+      stateCache.set(p.id, st);
+      versions.set(p.id, p.version ?? 0);
+      lastSaved.set(p.id, serializeState(st));
+      metas.push({ id: p.id, name: p.name });
+    }
+    projectList = metas;
+    if (metas.length === 0) {
+      currentProjectId = '';
+      applyLoadedState(emptyState());
+      return;
+    }
+    let target = metas[0].id;
+    if (typeof localStorage !== 'undefined') {
+      try {
+        const last = localStorage.getItem(`casa:lastOpened:${userId}`);
+        if (last && metas.some((m) => m.id === last)) target = last;
+      } catch {
+        // ignore
+      }
+    }
+    applyLoadedState(stateCache.get(target)!);
+    projectName = metas.find((m) => m.id === target)!.name;
+    currentProjectId = target;
+  }
+
+  // Migración única: sube los proyectos de localStorage al servidor (primer login en este navegador).
+  async function migrateLocalProjectsInternal(): Promise<boolean> {
+    if (typeof localStorage === 'undefined') return false;
+    const CLAIMED = 'casa:claimed:v1';
+    try {
+      if (localStorage.getItem(CLAIMED)) return false;
+    } catch {
+      return false;
+    }
+    const local = collectLocalProjects();
+    if (local.length === 0) {
+      try {
+        localStorage.setItem(CLAIMED, '1');
+      } catch {
+        // ignore
+      }
+      return false;
+    }
+    try {
+      const res = await fetch('/api/projects/claim', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ projects: local })
+      });
+      if (!res.ok) return false;
+      try {
+        localStorage.setItem(CLAIMED, '1');
+      } catch {
+        // ignore
+      }
+      const listRes = await fetch('/api/projects');
+      if (!listRes.ok) return false;
+      const data = await listRes.json();
+      hydrateInternal(currentUserId, { projects: data.projects ?? [] });
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  // Flujo de arranque del editor: hidratar del servidor -> reclamar localStorage -> crear si no hay nada.
+  async function initInternal(
+    userId: string,
+    serverProjects: HydratePayload['projects']
+  ): Promise<void> {
+    hydrateInternal(userId, { projects: serverProjects });
+    await migrateLocalProjectsInternal();
+    if (projectList.length === 0) createProjectInternal();
+  }
+
   if (typeof window !== 'undefined') {
     $effect.root(() => {
+      // Autosave del proyecto activo al servidor (con debounce).
       $effect(() => {
-        // persist closed rooms + rooms even if open are still valid sets (no contour yet)
-        const snapshot = JSON.stringify({
-          shapes,
-          selectedId,
-          viewMode,
-          rooms,
-          floors,
-          theme,
-          activeRoomId,
-          activeFloorId,
-          projectName
-        });
-        try {
-          localStorage.setItem(STORAGE_KEY, snapshot);
-        } catch {
-          // quota exceeded or storage disabled — ignore
-        }
+        if (!currentProjectId) return;
+        const snapshot = snapshotState();
+        stateCache.set(currentProjectId, currentLoadedState());
+        if (lastSaved.get(currentProjectId) === snapshot) return;
+        scheduleSave(currentProjectId, projectName, snapshot);
       });
     });
   }
@@ -435,13 +760,81 @@ function createStudio() {
     },
     setTheme(t: Theme) {
       theme = t;
+      if (typeof localStorage !== 'undefined') {
+        try {
+          localStorage.setItem('casa:theme', t);
+        } catch {
+          // ignore
+        }
+      }
     },
     get projectName() {
       return projectName;
     },
     setProjectName(name: string) {
       const trimmed = name.trim();
-      if (trimmed) projectName = trimmed;
+      if (!trimmed) return;
+      projectName = trimmed;
+      projectList = projectList.map((p) =>
+        p.id === currentProjectId ? { ...p, name: trimmed } : p
+      );
+    },
+    get projects() {
+      return projectList;
+    },
+    get currentProjectId() {
+      return currentProjectId;
+    },
+    get currentProject() {
+      return projectList.find((p) => p.id === currentProjectId) ?? null;
+    },
+    get saveStatus() {
+      return saveStatus;
+    },
+    init(userId: string, serverProjects: HydratePayload['projects']): Promise<void> {
+      return initInternal(userId, serverProjects);
+    },
+    hydrate(userId: string, payload: HydratePayload) {
+      hydrateInternal(userId, payload);
+    },
+    migrateLocalProjects(): Promise<boolean> {
+      return migrateLocalProjectsInternal();
+    },
+    flush(): Promise<void> {
+      return flushSave();
+    },
+    switchProject(id: string) {
+      if (!id || id === currentProjectId) return;
+      if (!projectList.some((p) => p.id === id)) return;
+      saveCurrentToCache();
+      void flushSave();
+      const meta = projectList.find((p) => p.id === id)!;
+      applyLoadedState(stateCache.get(id) ?? emptyState());
+      projectName = meta.name;
+      currentProjectId = id;
+      rememberLastOpened(id);
+    },
+    createProject(name?: string): string {
+      return createProjectInternal(name);
+    },
+    deleteProject(id: string) {
+      if (projectList.length <= 1) return;
+      const idx = projectList.findIndex((p) => p.id === id);
+      if (idx === -1) return;
+      const wasCurrent = id === currentProjectId;
+      const next = projectList.filter((p) => p.id !== id);
+      projectList = next;
+      stateCache.delete(id);
+      versions.delete(id);
+      lastSaved.delete(id);
+      apiDelete(id);
+      if (wasCurrent) {
+        const fallback = next[Math.min(idx, next.length - 1)];
+        applyLoadedState(stateCache.get(fallback.id) ?? emptyState());
+        projectName = fallback.name;
+        currentProjectId = fallback.id;
+        rememberLastOpened(fallback.id);
+      }
     },
     add(kind: ShapeKind) {
       if (!activeRoomId) return;
@@ -553,7 +946,8 @@ function createStudio() {
       if (trimmed) floor.name = trimmed;
     },
     removeFloor(id: string) {
-      if (floors.length <= 1) return;
+      // No borrar un piso que aún tiene habitaciones; primero hay que vaciarlo (mover o eliminar).
+      if (rooms.some((r) => r.floorId === id)) return;
       const remainingRoomIds = new Set(
         rooms.filter((r) => r.floorId !== id).map((r) => r.id)
       );
@@ -609,6 +1003,7 @@ function createStudio() {
       contourBackup = room.points.map((p) => ({ ...p }));
       activeRoomId = roomId;
       editingContourRoomId = roomId;
+      viewMode = 'top'; // editar dimensiones siempre en cenital
     },
     updateRoomPoint(roomId: string, index: number, x: number, z: number) {
       const room = rooms.find((r) => r.id === roomId);
@@ -657,8 +1052,24 @@ function createStudio() {
     finishEditingContour() {
       const room = rooms.find((r) => r.id === editingContourRoomId);
       if (room && !room.closed) return false;
+      const roomId = editingContourRoomId;
       contourBackup = null;
       editingContourRoomId = null;
+      // Al reformar el contorno cambia el nº de aristas: reconciliar las paredes para que
+      // NINGUNA arista quede sin pared, y volver al modo Paredes para revisar la altura.
+      if (room && room.wallHeights) {
+        const N = room.points.length;
+        const valid = room.wallHeights.filter((h) => h > 0.001);
+        const fill = valid.length ? Math.max(MIN_WALL_HEIGHT, ...valid) : DEFAULT_WALL_HEIGHT;
+        const next: number[] = [];
+        for (let i = 0; i < N; i++) {
+          const h = room.wallHeights[i];
+          next[i] = h != null && h > 0.001 ? h : fill;
+        }
+        room.wallHeights = next;
+        if (room.openings) room.openings = room.openings.filter((o) => o.edgeIdx < N);
+        if (roomId) enterWallsMode(roomId, false);
+      }
       return true;
     },
     cancelEditingContour() {
@@ -682,10 +1093,18 @@ function createStudio() {
       if (!room || !room.closed) return;
       activeRoomId = roomId;
       furnishingRoomId = roomId;
+      furnishingWallsHidden = false;
       viewMode = 'perspective';
     },
     stopFurnishing() {
       furnishingRoomId = null;
+      furnishingWallsHidden = false;
+    },
+    get furnishingWallsHidden() {
+      return furnishingWallsHidden;
+    },
+    toggleFurnishingWallsHidden() {
+      furnishingWallsHidden = !furnishingWallsHidden;
     },
     get wallsRoomId() {
       return wallsRoomId;
@@ -949,9 +1368,11 @@ function createStudio() {
         const migrated = migrate(data);
         shapes = migrated.shapes;
         rooms = migrated.rooms;
+        floors = migrated.floors;
         selectedId = null;
         drawingRoomId = null;
         activeRoomId = migrated.activeRoomId;
+        activeFloorId = migrated.activeFloorId;
         return { ok: true, count: migrated.shapes.length };
       } catch (e) {
         return { ok: false, error: e instanceof Error ? e.message : 'Error al parsear JSON.' };

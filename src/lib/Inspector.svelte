@@ -36,6 +36,15 @@
     }
   }
 
+  // Esc en "Nombra tu habitación": si estabas creando una nueva, borra el borrador; si
+  // renombrabas una existente, solo cierra el modal sin cambios.
+  function cancelRoomName(id: string) {
+    const wasCreating = studio.isCreatingNewRoom;
+    studio.setEditingRoomId(null);
+    studio.setIsCreatingNewRoom(false);
+    if (wasCreating) studio.removeRoom(id);
+  }
+
   function onCreateRoom() {
     studio.createAndEditRoom();
   }
@@ -111,12 +120,20 @@
     const f = studio.floors.find((x) => x.id === floorId);
     if (!f) return;
     const roomsHere = studio.rooms.filter((r) => r.floorId === floorId).length;
+    if (roomsHere > 0) {
+      // No se borra un piso con habitaciones: primero hay que vaciarlo.
+      await confirmStore.ask({
+        title: 'Piso con habitaciones',
+        message: `"${f.name}" tiene ${roomsHere} habitación${roomsHere === 1 ? '' : 'es'}. Muévelas a otro piso o elimínalas antes de borrar el piso.`,
+        confirmText: 'Entendido',
+        cancelText: 'Cerrar',
+        danger: false
+      });
+      return;
+    }
     const ok = await confirmStore.ask({
       title: 'Eliminar piso',
-      message:
-        roomsHere > 0
-          ? `Se eliminará "${f.name}" junto con ${roomsHere} habitación${roomsHere === 1 ? '' : 'es'} y todos sus objetos. ¿Continuar?`
-          : `¿Eliminar el piso "${f.name}"?`,
+      message: `¿Eliminar el piso "${f.name}"?`,
       confirmText: 'Eliminar',
       danger: true
     });
@@ -151,19 +168,37 @@
     { kind: 'sofa', label: 'Sofá', icon: '🛋' }
   ];
 
+  // Barra lateral glass replegable (patrón usual: se colapsa a un handle flotante y
+  // publica su ancho real en --sidebar-width para que el lienzo se ajuste solo).
+  let {
+    collapsed = false,
+    toggleCollapsed = () => {}
+  }: { collapsed?: boolean; toggleCollapsed?: () => void } = $props();
+
+  let sidebarWidth = $state(340);
+  $effect(() => {
+    if (typeof document !== 'undefined' && !collapsed) {
+      document.documentElement.style.setProperty('--sidebar-width', `${sidebarWidth}px`);
+    }
+  });
 </script>
 
-<aside class="panel">
-  <div class="project-header">
-    <h2 class="project-name">{studio.projectName}</h2>
+{#if collapsed}
+  <button class="reveal-handle" onclick={toggleCollapsed} aria-label="Mostrar panel" title="Mostrar panel">
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="m9 18 6-6-6-6" /></svg>
+  </button>
+{:else}
+<aside class="panel" bind:clientWidth={sidebarWidth}>
+  <div class="panel-head">
+    <h2 class="panel-project" title={studio.projectName}>{studio.projectName || 'Sin nombre'}</h2>
     <button
-      class="edit project-edit"
+      class="edit"
       onclick={() => studio.setEditingProject(true)}
       title="Renombrar proyecto"
       aria-label="Renombrar proyecto">✎</button
     >
   </div>
-
+  <div class="panel-scroll">
   <button
     class="new-room-btn"
     onclick={onCreateRoom}
@@ -176,10 +211,6 @@
   </button>
 
   <section>
-    <h2>
-      Habitaciones
-      <span class="count">{studio.rooms.length}</span>
-    </h2>
     {#each studio.floors as floor (floor.id)}
       {@const floorRooms = studio.rooms.filter((r) => r.floorId === floor.id)}
       {@const collapsed = collapsedFloors.has(floor.id)}
@@ -216,8 +247,7 @@
           <button
             class="del floor-del"
             onclick={() => confirmRemoveFloor(floor.id)}
-            disabled={studio.floors.length <= 1}
-            title={studio.floors.length <= 1 ? 'No puedes eliminar el único piso' : 'Eliminar piso'}
+            title="Eliminar piso"
             aria-label="Eliminar piso">✕</button
           >
         </div>
@@ -331,7 +361,7 @@
       </div>
     {/each}
     <button class="new-floor-btn" onclick={() => studio.createFloor()} title="Agregar piso">
-      <span class="icon">+</span><span>Nuevo piso</span>
+      <span class="icon">+</span><span>Nuevo piso (nivel)</span>
     </button>
   </section>
 
@@ -435,7 +465,14 @@
       </label>
     </section>
   {/if}
+  </div>
+  <div class="panel-foot">
+    <button class="collapse-btn" onclick={toggleCollapsed} aria-label="Replegar panel" title="Replegar">
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="m15 18-6-6 6-6" /></svg>
+    </button>
+  </div>
 </aside>
+{/if}
 
 {#if studio.editingRoomId !== null}
   {@const editingRoom = studio.rooms.find((r) => r.id === studio.editingRoomId)}
@@ -457,13 +494,14 @@
             } else if (e.key === 'Escape') {
               e.preventDefault();
               e.stopPropagation();
+              cancelRoomName(editingRoom.id);
             }
           }}
           onblur={(e) => {
             if (studio.editingRoomId !== null) (e.currentTarget as HTMLInputElement).focus();
           }}
         />
-        <p class="rename-hint">Nombra a la habitación · Enter para guardar</p>
+        <p class="rename-hint">Enter para guardar · Esc para cancelar</p>
       </div>
     </div>
   {/if}
@@ -541,16 +579,129 @@
 {/if}
 
 <style>
+  /* Barra lateral glass fija a la izquierda (patrón "leftvar" del usuario). */
   .panel {
+    position: fixed;
+    top: calc(var(--topbar-h) + 1rem);
+    left: 1rem;
+    bottom: 1rem;
+    width: 340px;
+    max-width: calc(100vw - 2rem);
+    box-sizing: border-box;
+    z-index: 15;
+    padding: 1rem;
+    display: flex;
+    flex-direction: column;
     background: rgba(255, 255, 255, 0.6);
     border: 1px solid rgba(26, 19, 0, 0.2);
     border-radius: 16px;
-    padding: 1rem;
-    backdrop-filter: blur(8px);
+    backdrop-filter: blur(8px) saturate(115%);
+    -webkit-backdrop-filter: blur(8px) saturate(115%);
+    box-shadow:
+      inset 0 1px 0 rgba(255, 255, 255, 0.35),
+      0 8px 28px rgba(0, 0, 0, 0.16);
+    overflow: hidden;
+  }
+  .panel-scroll {
+    flex: 1;
+    min-height: 0;
     overflow-y: auto;
     display: flex;
     flex-direction: column;
     gap: 1.1rem;
+    padding-right: 0.15rem;
+  }
+  .panel-head {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    flex: none;
+    margin-bottom: 0.6rem;
+  }
+  .panel-project {
+    flex: 0 1 auto;
+    min-width: 0;
+    display: block;
+    margin: 0;
+    font-size: 1.15rem;
+    font-weight: 900;
+    letter-spacing: -0.01em;
+    text-transform: none;
+    color: var(--ink);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .panel-head .edit {
+    flex: none;
+  }
+  .panel-foot {
+    flex: none;
+    display: flex;
+    justify-content: flex-end;
+    margin-top: 0.4rem;
+    padding-top: 0.7rem;
+    border-top: 1px solid rgba(26, 19, 0, 0.12);
+  }
+  :global(.theme-blueprint) .panel-foot {
+    border-top-color: rgba(255, 255, 255, 0.14);
+  }
+  .collapse-btn {
+    flex: none;
+    width: 28px;
+    height: 28px;
+    padding: 0;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    background: rgba(26, 19, 0, 0.06);
+    border: 1px solid rgba(26, 19, 0, 0.18);
+    border-radius: 8px;
+    color: var(--ink);
+    cursor: pointer;
+    opacity: 0.65;
+    transition: opacity 0.15s, background 0.15s;
+  }
+  .collapse-btn:hover {
+    opacity: 1;
+    background: rgba(26, 19, 0, 0.12);
+  }
+  .reveal-handle {
+    position: fixed;
+    left: 0.75rem;
+    top: 50%;
+    transform: translateY(-50%);
+    z-index: 15;
+    width: 34px;
+    height: 46px;
+    padding: 0;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    background: rgba(255, 255, 255, 0.6);
+    border: 1px solid rgba(26, 19, 0, 0.2);
+    border-radius: 12px;
+    color: var(--ink);
+    cursor: pointer;
+    backdrop-filter: blur(8px) saturate(115%);
+    -webkit-backdrop-filter: blur(8px) saturate(115%);
+    box-shadow:
+      inset 0 1px 0 rgba(255, 255, 255, 0.35),
+      0 8px 28px rgba(0, 0, 0, 0.16);
+    transition: background 0.15s;
+  }
+  .reveal-handle:hover {
+    background: rgba(255, 255, 255, 0.82);
+  }
+  :global(.theme-blueprint) .collapse-btn,
+  :global(.theme-blueprint) .reveal-handle {
+    background: rgba(255, 255, 255, 0.08);
+    border-color: rgba(255, 255, 255, 0.25);
+    color: #fff;
+  }
+  :global(.theme-blueprint) .collapse-btn:hover,
+  :global(.theme-blueprint) .reveal-handle:hover {
+    background: rgba(255, 255, 255, 0.16);
   }
 
   h2 {
@@ -904,29 +1055,6 @@
     border-radius: 6px;
   }
 
-  .project-header {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    gap: 0.4rem;
-    margin-bottom: 0.2rem;
-  }
-  .project-name {
-    margin: 0;
-    color: #fff;
-    font-size: 1.2rem;
-    font-weight: 900;
-    letter-spacing: -0.01em;
-    text-transform: none;
-  }
-  .project-edit {
-    color: #fff;
-    opacity: 0.7;
-  }
-  .project-edit:hover {
-    opacity: 1;
-  }
-
   .new-room-btn {
     width: 100%;
     display: flex;
@@ -966,8 +1094,7 @@
     display: flex;
     align-items: center;
     justify-content: center;
-    /* Offset to roughly match the work-area: skip header on top, inspector on right */
-    padding: 5rem calc(340px + 2.25rem) 1.25rem 1.25rem;
+    padding: 1.25rem;
     z-index: 50;
     animation: fadeIn 0.12s ease-out;
   }
